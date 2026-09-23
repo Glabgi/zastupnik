@@ -65,9 +65,31 @@ button{font-family:var(--body);color:inherit;cursor:pointer}
 .stand{
   height:100dvh;overflow:hidden;
   display:flex;flex-direction:column;align-items:center;
-  gap:12px;padding:12px 12px 14px;
+  gap:10px;padding:10px 12px 14px;
 }
+/* Свёрнутый стенд — тонкая полоса, чтобы первым экраном был продукт,
+   а не переключатель ролей. Развёрнутый остаётся прежним. */
+.stand-toggle{
+  width:100%;max-width:520px;flex:none;
+  background:var(--duty-bg);color:var(--duty-muted);
+  border:none;border-radius:999px;padding:9px 15px;
+  display:flex;align-items:center;gap:9px;
+  font-family:var(--mono);font-size:9.5px;font-weight:700;
+  letter-spacing:.16em;text-transform:uppercase;
+  transition:color .18s;
+}
+.stand-toggle:hover{color:var(--duty-ink)}
+.stand-toggle .st-dot{
+  width:6px;height:6px;border-radius:50%;background:var(--green-soft);flex:none;
+}
+.stand-toggle .st-role{
+  margin-left:auto;color:var(--green-soft);letter-spacing:.1em;
+}
+.stand-toggle .st-chev{transform:rotate(90deg);transition:transform .2s}
+.stand-toggle[aria-expanded="true"] .st-chev{transform:rotate(-90deg)}
+.standbar[hidden]{display:none}
 .standbar{
+  flex:none;
   width:100%;max-width:520px;
   background:var(--duty-bg);color:var(--duty-ink);
   border-radius:18px;padding:12px 14px;
@@ -470,7 +492,14 @@ button{font-family:var(--body);color:inherit;cursor:pointer}
 </defs></svg>
 
 <div class="stand">
-  <div class="standbar">
+  <button class="stand-toggle" id="stand-toggle" data-act="stand"
+          aria-expanded="false" aria-controls="standbar">
+    <span class="st-dot"></span>Демо-стенд
+    <span class="st-role" id="stand-role"></span>
+    <svg class="st-chev" style="width:13px;height:13px;flex:none" aria-hidden="true"><use href="#i-chev"></use></svg>
+  </button>
+
+  <div class="standbar" id="standbar" hidden>
     <div class="sb-title">Демо-стенд · прототип на моках</div>
     <div class="sb-sub">Одно состояние на четыре роли: действие сопровождающего сразу видно родителю и дежурному.</div>
     <div class="roles" id="roles"></div>
@@ -692,6 +721,7 @@ const S = {
   tab: { parent: 'today', escort: 'tasks', coord: 'school', duty: 'inbox' },
   stack: [],
   sheet: null,
+  stand: false, // демо-стенд свёрнут: первым экраном человек видит продукт
 };
 
 /* ---------- геометрия маршрута (замеряется в скрытом SVG) ---------- */
@@ -1465,6 +1495,10 @@ function render(opts) {
   $('#nav').innerHTML = navBar();
   syncChrome(key);
   if (keep) return; // демо-панель перерисовываем только на действиях пользователя
+  $('#stand-toggle').setAttribute('aria-expanded', String(S.stand));
+  $('#stand-role').textContent = (ROLES.find((r) => r[0] === S.role) || [])[1] || '';
+  $('#standbar').hidden = !S.stand;
+  if (!S.stand) return; // свёрнутый стенд незачем наполнять
   $('#roles').innerHTML = ROLES.map(([id, label, icon]) =>
     '<button data-act="role" data-v="' + id + '" aria-pressed="' + (S.role === id) + '">' + ic(icon, 19) + label + '</button>').join('');
   const t = DB.trip;
@@ -1591,6 +1625,7 @@ const A = {
   },
 
   /* демо-сценарии */
+  stand() { S.stand = !S.stand; },
   'scen-freeze'() {
     const t = DB.trip;
     if (!t || t.done) { toast('Поездка уже завершена — сбросьте демо, чтобы повторить сценарий.'); return; }
