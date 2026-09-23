@@ -294,6 +294,34 @@ button{font-family:var(--body);color:inherit;cursor:pointer}
 .chip[aria-pressed="true"]{background:var(--green);color:#fff;border-color:var(--green)}
 .app.dark .chip{background:rgba(255,255,255,.07);border-color:var(--duty-line);color:var(--duty-ink);box-shadow:none}
 
+/* ---------- лестница доверия ---------- */
+.tmeter{display:flex;gap:4px;margin-top:12px}
+.tmeter i{flex:1;height:5px;border-radius:3px;background:rgba(20,32,26,.10)}
+.tmeter i.on{background:var(--green)}
+.tmeter i.gate{background:var(--gold)}
+.tlev{display:flex;gap:12px;align-items:flex-start;padding:14px 15px;border-bottom:1px solid var(--line)}
+.tlev:last-child{border-bottom:none}
+.tlev .tn{
+  width:27px;height:27px;border-radius:9px;flex:none;display:grid;place-items:center;
+  background:rgba(20,32,26,.06);color:var(--muted);
+  font-family:var(--mono);font-size:11px;font-weight:700;
+}
+.tlev .tn svg{width:15px;height:15px}
+.tlev.done .tn{background:var(--green);color:#fff}
+.tlev.now .tn{background:var(--tint-gold);color:var(--gold)}
+.tlev .tq{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45;display:block}
+.tlev .thow{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.45;display:block;
+  padding-left:9px;border-left:2px solid var(--line)}
+.tlev .tcost{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;color:var(--muted);
+  text-transform:uppercase;white-space:nowrap}
+.tbadge{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);
+  font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  padding:4px 8px;border-radius:8px;background:var(--tint);color:var(--green-deep)}
+.tbadge svg{width:12px;height:12px}
+.tbadge.warn{background:var(--tint-gold);color:var(--gold)}
+.tbadge.mute{background:rgba(20,32,26,.06);color:var(--muted)}
+.app.dark .tbadge{background:rgba(255,255,255,.08);color:var(--green-soft)}
+
 /* ---------- дни покрытия ---------- */
 .days{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-top:12px}
 .day{
@@ -572,6 +600,36 @@ const maxBridge = (() => {
       return true;
     },
 
+    /* --- поверхности верификации ---------------------------------
+       Всё, что MAX реально даёт для ответа на вопрос «кто этот человек».
+       Каждый метод возвращает Promise либо null, если мы не в мессенджере, —
+       вызывающий код сам решает, что показать в демо-режиме. */
+
+    // Номер телефона, привязанный к аккаунту MAX. Нативное модальное окно.
+    // Ответ {phone, authDate, hash} проверяется на сервере:
+    // HMAC_SHA256(authDate + phone + userId, botToken), phone без «+».
+    // Это же — законный способ авторизации по ч.10 ст.8 149-ФЗ.
+    requestPhone() { return wa && wa.requestContact ? wa.requestContact() : null; },
+
+    // Биометрия устройства: подтверждает, что телефоном пользуется владелец.
+    // Не заменяет документы — отвечает на другой вопрос: «он ли это сейчас».
+    biometry: {
+      init() { return wa && wa.BiometricManager ? call(() => wa.BiometricManager.init()) : null; },
+      auth(reason) { return wa && wa.BiometricManager ? call(() => wa.BiometricManager.authenticate(reason)) : null; },
+    },
+
+    // QR: подтверждение передачи ребёнка встречающему. Сильнее фото —
+    // код живёт на экране принимающего и подтверждает присутствие.
+    scanQR() { return wa && wa.openCodeReader ? call(() => wa.openCodeReader(false)) : null; },
+
+    // Внешний браузер — сюда уходит ЕСИА и заказ справки на Госуслугах.
+    openLink(url) { if (wa && wa.openLink) { call(() => wa.openLink(url)); return true; } return false; },
+    // Диплинк внутрь MAX или в нативный «Заступник».
+    openMaxLink(url) { if (wa && wa.openMaxLink) { call(() => wa.openMaxLink(url)); return true; } return false; },
+
+    // Экраны с данными ребёнка не должны утекать скриншотом.
+    screenshots(on) { call(() => (on ? wa.ScreenCapture.enableScreenCapture() : wa.ScreenCapture.disableScreenCapture())); },
+
     // В MAX нет кнопки «назад» браузера — её рисует сам мессенджер.
     back: {
       onClick(cb) { call(() => wa.BackButton.onClick(cb)); },
@@ -619,6 +677,56 @@ const STAGE_PARENT = [
 ];
 
 /* ---------- данные ---------- */
+/* ---------- лестница доверия --------------------------------------
+   Верификация — то единственное, что мини-апп делает лучше нативного
+   приложения: он живёт внутри мессенджера, где у человека уже есть
+   подтверждённый российский номер. Уровни независимы, но порядок не
+   случаен — каждый следующий дороже предыдущего и отвечает на свой
+   вопрос. «Проверен» без указания уровня — это не факт, а обещание.
+-------------------------------------------------------------------- */
+const TRUST = [
+  { id: 'max', icon: 'chat', name: 'Аккаунт MAX',
+    q: 'Есть ли за экраном живой аккаунт',
+    how: 'Подпись initData сверяется на сервере с токеном бота',
+    cost: 'мгновенно' },
+  { id: 'phone', icon: 'phone', name: 'Номер телефона',
+    q: 'Чей это номер и куда звонить',
+    how: 'requestContact() в MAX. Хеш ответа сверяется с токеном бота — номер тот же, что привязан к аккаунту',
+    cost: 'мгновенно' },
+  { id: 'person', icon: 'profile', name: 'Личность',
+    q: 'Как его зовут на самом деле',
+    how: 'Вход через Госуслуги. До подключения ЕСИА — банковский ID или ручная модерация «Заступника»',
+    cost: 'минуты' },
+  { id: 'crim', icon: 'doc', name: 'Несудимость',
+    q: 'Можно ли пускать его к детям',
+    how: 'Справка МВД из Госуслуг, подписанная ведомством. Заказывает сам человек, мы проверяем подпись',
+    cost: 'до 30 дней' },
+  { id: 'local', icon: 'school', name: 'Свой в школе',
+    q: 'Откуда он здесь взялся',
+    how: 'Координатор подтверждает то, что и так знает: этот человек учится или водит ребёнка в этот класс',
+    cost: 'дни' },
+  { id: 'live', icon: 'eye', name: 'Живость на выходе',
+    q: 'Он ли это сегодня',
+    how: 'Биометрия устройства перед каждым выходом на маршрут. Проверяет не документы, а то, что телефон в тех же руках',
+    cost: 'каждый раз' },
+];
+const TRUST_BY = {};
+TRUST.forEach((t, i) => { TRUST_BY[t.id] = t; t.n = i; });
+
+/* Порог, ниже которого человека нельзя поставить к чужому ребёнку.
+   Несудимость — не формальность: это единственный уровень, который
+   отвечает на вопрос родителя, а не на вопрос платформы. */
+const ESCORT_GATE = 'crim';
+
+/* Чей уровень показываем. В демо роль сопровождающего носит Алина —
+   в её шкуре «мои проверки» это её проверки. В остальных ролях человек
+   за экраном — родитель, который проходит лестницу с нуля. */
+const meNow = () => (S.role === 'escort' ? DB.people.a1 : DB.me);
+
+const trustHas = (p, id) => !!(p.trust && p.trust[id]);
+const trustCount = (p) => TRUST.filter((t) => trustHas(p, t.id)).length;
+const trustOk = (p) => trustHas(p, ESCORT_GATE);
+
 const DB = {
   parent: { name: 'Ольга Соколова', initial: 'О' },
   child: { name: 'Миша', initial: 'М', cls: '2 «Б»', code: 'sch1-2b', school: 'Школа №1' },
@@ -629,21 +737,26 @@ const DB = {
       id: 'a1', name: 'Алина Кузнецова', initial: 'А', role: '10 «Б» · Школа №1', age: 16,
       trips: 34, rating: '4.9', match: 94,
       why: 'Идёт в ту же школу, живёт в соседнем подъезде — сопровождение встроено в её день',
-      checks: ['Документы', 'Согласие родителей', 'Справка о несудимости', 'Звонок оператора', 'Первый путь вместе'],
+      trust: { max: 1, phone: 1, person: 1, crim: 1, local: 1 },
     },
     a2: {
       id: 'a2', name: 'Тимур Валеев', initial: 'Т', role: '11 «А» · Школа №1', age: 17,
       trips: 12, rating: '5.0', match: 88,
       why: 'Тот же коридор, выходит на 6 минут раньше — совпадение по времени звонка',
-      checks: ['Документы', 'Согласие родителей', 'Справка о несудимости', 'Звонок оператора'],
+      // Лучший по коридору, но справка ещё едет: порог не двигается под удобство.
+      trust: { max: 1, phone: 1, person: 1 },
     },
     a3: {
       id: 'a3', name: 'Марина Пестова', initial: 'М', role: 'Родитель · 2 «Б»', age: 38,
       trips: 61, rating: '4.8', match: 71,
       why: 'Ведёт своего ребёнка в тот же класс — попутное сопровождение',
-      checks: ['Документы', 'Справка о несудимости', 'Звонок оператора', 'Первый путь вместе'],
+      trust: { max: 1, phone: 1, person: 1, crim: 1, local: 1 },
     },
   },
+
+  /* Проверка того, кто сейчас держит телефон. Начинается с одного уровня:
+     мини-апп открыт — значит, аккаунт MAX есть. Остальное человек проходит сам. */
+  me: { trust: { max: 1 }, phone: '', legalName: '', crimAt: 0 },
 
   routes: [
     {
@@ -958,6 +1071,15 @@ V.parentProfile = () => {
       '<span class="meta">' + DB.child.school + ' · класс подтверждён координатором</span></span>' +
       '<span class="pill">' + ic('check', 12) + '</span></div>' +
     '</div>' +
+    '<button class="card" style="margin-top:11px;width:100%;text-align:left;border:none" data-act="push" data-page="verify">' +
+      '<div class="row"><span class="ic-box ' + (trustOk(DB.me) ? '' : 'warn') + '">' + ic('shield', 18) + '</span>' +
+      '<span class="grow"><span class="name">Проверка личности</span>' +
+      '<span class="meta">' + (trustOk(DB.me)
+        ? 'Уровня хватает, чтобы вести чужого ребёнка'
+        : trustCount(DB.me) + ' из ' + TRUST.length + ' уровней — заказать сопровождение пока нельзя') + '</span></span>' +
+      trustBadge(DB.me) + '<span class="chev">' + ic('chev', 17) + '</span></div>' +
+      trustMeter(DB.me) +
+    '</button>' +
     '<div class="sec"><div class="sec-head"><span class="h2 grow">Кто может забирать</span></div>' +
     '<div class="group">' + DB.routes[1].whitelist.map((w) => '<div class="lrow">' +
       '<span class="avatar sm">' + w.name[0] + '</span>' +
@@ -1012,9 +1134,11 @@ P.track = () => {
     '<div class="card"><div class="log">' + t.log.slice().reverse().map((l) =>
       '<div class="log-item"><span class="t">' + l.t + '</span><span class="b">' + l.b + '<em>' + l.a + '</em></span></div>').join('') +
     '</div></div></div>' +
-    '<div class="btn-row"><button class="btn ghost sm" data-act="chat">' + ic('chat', 17) + 'Чат поездки</button></div>' +
+    '<div class="btn-row"><button class="btn ghost sm" data-act="chat">' + ic('chat', 17) + 'Чат поездки</button>' +
+      '<button class="btn ghost sm" data-act="open-native">' + ic('loc', 17) + 'Карта в «Заступнике»</button></div>' +
     '<button class="btn danger" style="margin-top:9px" data-act="parent-sos">' + ic('alarm', 18) + 'SOS — тревожная кнопка</button>' +
-    '<p class="note">Чат хранится внутри сервиса, чтобы поддержка могла разобрать спорную ситуацию. Координаты в MAX не передаются.</p>';
+    '<p class="note">Точку присылает нативное приложение «Заступника» — мини-апп её только показывает и ничего не измеряет сам. ' +
+      'Фоновая геопозиция в webview мессенджера невозможна, поэтому живая карта живёт в «Заступнике», а MAX отвечает за проверку людей, заказ и статусы.</p>';
 };
 
 function kv(k, v) { return '<div class="kv-row"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
@@ -1067,15 +1191,20 @@ P.match = (p) => {
     list.map((c) => '<div class="card">' +
       '<div class="row"><span class="avatar">' + c.initial + '</span>' +
       '<span class="grow"><span class="name">' + c.name + '</span><span class="meta">' + c.role + ' · ' + plural(c.trips, 'сопровождение', 'сопровождения', 'сопровождений') + ' · рейтинг ' + c.rating + '</span></span>' +
-      '<span class="pill mono">' + c.match + '%</span></div>' +
+      trustBadge(c) + '<span class="pill mono">' + c.match + '%</span></div>' +
       '<p class="meta" style="margin-top:10px">' + c.why + '</p>' +
-      '<div class="chips" style="margin-top:10px">' + c.checks.map((ch) =>
-        '<span class="chip" style="box-shadow:none;padding:6px 9px;font-size:11px">' + ic('check', 13) + ch + '</span>').join('') +
-      '</div>' +
-      '<div class="btn-row">' +
-        '<button class="btn primary sm" data-act="approve" data-c="' + c.id + '" data-r="' + r.id + '" data-d="' + day + '">Одобрить</button>' +
-        '<button class="btn ghost sm" data-act="toast" data-msg="Кандидат отклонён. Подберём другого и сообщим — это механизм, а не норматив по сроку.">Отклонить</button>' +
-      '</div>' +
+      trustChips(c) +
+      (trustOk(c)
+        ? '<div class="btn-row">' +
+            '<button class="btn primary sm" data-act="approve" data-c="' + c.id + '" data-r="' + r.id + '" data-d="' + day + '">Одобрить</button>' +
+            '<button class="btn ghost sm" data-act="toast" data-msg="Кандидат отклонён. Подберём другого и сообщим — это механизм, а не норматив по сроку.">Отклонить</button>' +
+          '</div>'
+        : '<div class="card flat" style="margin-top:11px;padding:11px 12px">' +
+            '<div class="row"><span class="ic-box warn">' + ic('lock', 18) + '</span>' +
+            '<span class="grow"><span class="name" style="font-size:13px">Нельзя назначить</span>' +
+            '<span class="meta">Нет уровня «' + TRUST_BY[ESCORT_GATE].name + '». Справка заказана и придёт до 30 дней — до неё кандидат виден, но недоступен.</span></span></div>' +
+            '<button class="btn ghost sm" style="margin-top:10px" data-act="approve" data-c="' + c.id + '" data-r="' + r.id + '" data-d="' + day + '">Всё равно одобрить</button>' +
+          '</div>') +
     '</div>').join('') + '</div>' +
     '<p class="note">Совпадение коридора — доля общего пути и времени выхода. Оно и делает сопровождение дешевле такси: человек уже идёт этим путём.</p>';
 };
@@ -1097,6 +1226,85 @@ P.proof = () => {
       '<div class="log-item"><span class="t">' + l.t + '</span><span class="b">' + l.b + '<em>' + l.a + '</em></span></div>').join('') +
     '</div></div></div>' +
     '<p class="note">Завершение необратимо и однократно: закрыть поездку может только тот, кто её вёл. Отменённая поездка никогда не показывается завершённой.</p>';
+};
+
+/* ---------- проверка личности --------------------------------------
+   Главный экран мини-аппа: в MAX человек уже сидит с подтверждённым
+   номером, и дешевле всего проверять его здесь. Геотрекинг остаётся
+   нативному «Заступнику» — сюда он не переезжает.
+--------------------------------------------------------------------- */
+const TRUST_CTA = {
+  phone: ['Подтвердить номер', 'verify-phone'],
+  person: ['Войти через Госуслуги', 'verify-person'],
+  crim: ['Заказать справку', 'verify-crim'],
+  local: ['Напомнить координатору', 'verify-local'],
+  live: ['Включить биометрию', 'verify-live'],
+};
+
+function trustBadge(p) {
+  const n = trustCount(p);
+  if (trustOk(p)) return '<span class="tbadge">' + ic('shield', 12) + n + ' из ' + TRUST.length + '</span>';
+  return '<span class="tbadge warn">' + ic('info', 12) + n + ' из ' + TRUST.length + '</span>';
+}
+
+/* Чипы уровней: пройденные — зелёной галочкой, недостающие показываем
+   тем же списком серым. Пустота на месте уровня информативнее, чем его
+   отсутствие в перечне: родитель видит, чего именно не хватает. */
+function trustChips(p) {
+  return '<div class="chips" style="margin-top:10px">' + TRUST.filter((t) => t.id !== 'live').map((t) => {
+    const ok = trustHas(p, t.id);
+    return '<span class="chip" style="box-shadow:none;padding:6px 9px;font-size:11px' +
+      (ok ? '' : ';opacity:.45;border-style:dashed') + '">' +
+      ic(ok ? 'check' : 'close', 13) + t.name + '</span>';
+  }).join('') + '</div>';
+}
+
+function trustMeter(p) {
+  return '<div class="tmeter">' + TRUST.map((t) =>
+    '<i class="' + (trustHas(p, t.id) ? (t.id === ESCORT_GATE ? 'on gate' : 'on') : '') + '"></i>').join('') + '</div>';
+}
+
+P.verify = () => {
+  const me = meNow();
+  const done = trustCount(me);
+  const next = TRUST.find((t) => !trustHas(me, t.id));
+  return backHead('Проверка личности') +
+    '<p class="sub">Родителю нужен ответ не «проверен», а <b>чем именно</b>. Каждый уровень отвечает на свой вопрос и стоит своего времени.</p>' +
+    '<div class="card" style="margin-top:14px">' +
+      '<div class="row"><span class="grow"><span class="name">Пройдено ' + done + ' из ' + TRUST.length + '</span>' +
+      '<span class="meta">' + (trustOk(me)
+        ? 'Достаточно, чтобы вести чужого ребёнка.'
+        : 'Чтобы вести чужого ребёнка, нужен уровень «' + TRUST_BY[ESCORT_GATE].name + '».') + '</span></span>' +
+      trustBadge(me) + '</div>' + trustMeter(me) +
+    '</div>' +
+    '<div class="sec"><div class="group">' +
+    TRUST.map((t) => {
+      const ok = trustHas(me, t.id);
+      const isNext = next && next.id === t.id;
+      const cta = TRUST_CTA[t.id];
+      return '<div class="tlev ' + (ok ? 'done' : isNext ? 'now' : '') + '">' +
+        '<span class="tn">' + (ok ? ic('check', 15) : String(t.n + 1)) + '</span>' +
+        '<span class="grow">' +
+          '<span class="row" style="gap:8px"><span class="name grow">' + t.name + '</span>' +
+          (ok ? '<span class="tbadge">' + ic('check', 12) + 'есть</span>'
+              : '<span class="tcost">' + t.cost + '</span>') + '</span>' +
+          '<span class="tq">' + t.q + '</span>' +
+          '<span class="thow">' + t.how + '</span>' +
+          (!ok && cta ? '<button class="btn ghost sm" style="margin-top:10px" data-act="' + cta[1] + '">' + cta[0] + '</button>' : '') +
+        '</span></div>';
+    }).join('') +
+    '</div></div>' +
+    '<div class="sec"><div class="sec-head"><span class="h2 grow">Что открывает уровень</span></div>' +
+    '<div class="group">' +
+      '<div class="lrow"><span class="ic-box">' + ic('eye', 18) + '</span><span class="grow"><span class="name">Смотреть и получать уведомления</span>' +
+      '<span class="meta">Аккаунт MAX</span></span></div>' +
+      '<div class="lrow"><span class="ic-box">' + ic('route', 18) + '</span><span class="grow"><span class="name">Заказать сопровождение своему ребёнку</span>' +
+      '<span class="meta">Номер телефона + личность</span></span></div>' +
+      '<div class="lrow"><span class="ic-box ' + (trustOk(me) ? '' : 'warn') + '">' + ic('walk', 18) + '</span><span class="grow"><span class="name">Вести чужого ребёнка</span>' +
+      '<span class="meta">Несудимость и подтверждение школы</span></span>' +
+      (trustOk(me) ? '<span class="pill">открыто</span>' : '<span class="pill warn">закрыто</span>') + '</div>' +
+    '</div></div>' +
+    '<p class="note">Уровни хранятся на сервере, а не в приложении: подпись запуска, хеш номера и справку проверяет бэкенд. Клиент только показывает результат — иначе «проверку» можно было бы нарисовать себе самому.</p>';
 };
 
 P.wizard = () => {
@@ -1226,13 +1434,18 @@ E.active = () => {
 };
 
 E.profile = () => {
-  const me = DB.people.a1;
+  const me = meNow();
   return '<div class="eyebrow">Профиль сопровождающего</div>' +
     '<h1 class="h1" style="margin-top:6px">' + me.name + '</h1>' +
     '<p class="sub">' + me.role + ' · 16 лет</p>' +
-    '<div class="sec"><div class="sec-head"><span class="h2 grow">Проверки</span><span class="pill mono">5/5</span></div>' +
-    '<div class="group">' + me.checks.map((c) => '<div class="lrow"><span class="ic-box">' + ic('check', 18) + '</span>' +
-      '<span class="grow"><span class="name">' + c + '</span></span><span class="pill">пройдено</span></div>').join('') + '</div></div>' +
+    '<div class="sec"><div class="sec-head"><span class="h2 grow">Проверки</span>' + trustBadge(me) + '</div>' +
+    '<div class="group">' + TRUST.map((t) => {
+      const ok = trustHas(me, t.id);
+      return '<div class="lrow"><span class="ic-box ' + (ok ? '' : 'warn') + '">' + ic(ok ? 'check' : t.icon, 18) + '</span>' +
+        '<span class="grow"><span class="name">' + t.name + '</span><span class="meta">' + t.q + '</span></span>' +
+        '<span class="pill ' + (ok ? '' : 'warn') + '">' + (ok ? 'есть' : 'нет') + '</span></div>';
+    }).join('') + '</div>' +
+    '<button class="btn ghost sm" style="margin-top:11px" data-act="push" data-page="verify">' + ic('shield', 18) + 'Открыть проверку личности</button></div>' +
     '<div class="sec"><div class="sec-head"><span class="h2 grow">Обучение</span><span class="pill warn mono">2/4</span></div>' +
     '<div class="group">' +
       '<div class="lrow"><span class="ic-box">' + ic('check', 18) + '</span><span class="grow"><span class="name">Дорога и переходы</span></span><span class="pill">сдано</span></div>' +
@@ -1285,8 +1498,7 @@ C.cand = () => {
       '<div class="row"><span class="avatar">' + c.initial + '</span>' +
       '<span class="grow"><span class="name">' + c.name + '</span><span class="meta">' + c.role + ' · ' + c.age + ' лет</span></span>' +
       '<span class="pill ' + (C.confirmed && C.confirmed[c.id] ? '' : 'warn') + '">' + (C.confirmed && C.confirmed[c.id] ? 'подтверждён' : 'ждёт школу') + '</span></div>' +
-      '<div class="chips" style="margin-top:10px">' + c.checks.map((ch) =>
-        '<span class="chip" style="box-shadow:none;padding:6px 9px;font-size:11px">' + ic('check', 13) + ch + '</span>').join('') + '</div>' +
+      trustChips(c) +
       (C.confirmed && C.confirmed[c.id] ? '' :
         '<button class="btn ghost sm" style="margin-top:11px" data-act="confirm-student" data-c="' + c.id + '">Подтвердить факт обучения</button>') +
     '</div>').join('') + '</div>' +
@@ -1432,7 +1644,7 @@ const TABS = {
   school: C.school, cand: C.cand,
   inbox: D.inbox, trips: D.trips,
 };
-const PAGES = { track: P.track, route: P.route, match: P.match, proof: P.proof, wizard: P.wizard, active: E.active };
+const PAGES = { track: P.track, route: P.route, match: P.match, proof: P.proof, wizard: P.wizard, verify: P.verify, active: E.active };
 const LIVE = ['today', 'track', 'active', 'inbox', 'trips'];
 
 function currentKey() {
@@ -1521,8 +1733,66 @@ const A = {
   match(el) { S.stack.push({ name: 'match', p: { r: el.dataset.r, d: el.dataset.d } }); },
   chat() { openSheet(chatSheet()); },
 
+  /* ---------- уровни проверки ----------
+     Каждое действие вызывает настоящий метод MAX и честно сообщает,
+     что происходит вне мессенджера, — молча подмигивать успехом нельзя:
+     на этих экранах обещание проверки и есть продукт. */
+  'verify-phone'() {
+    const p = maxBridge.requestPhone();
+    if (!p) {
+      toast('<b>Вне MAX номер не запросить.</b> В мессенджере здесь откроется нативное окно, а сервер сверит хеш ответа с токеном бота — это подтвердит, что номер тот же, что привязан к аккаунту.');
+      return;
+    }
+    p.then((r) => {
+      const m = meNow();
+      m.trust.phone = 1;
+      m.phone = r && r.phone || '';
+      maxBridge.notify('success');
+      toast('<b>Номер получен.</b> Подтверждённым он станет после сверки хеша на сервере — до этого показываем его как непроверенный.');
+      render();
+    }).catch(() => {
+      toast('Без номера дальше нельзя: это единственный канал, по которому до вас дозвонится дежурный.');
+      render();
+    });
+  },
+  'verify-person'() {
+    // ЕСИА — внешний браузер: OAuth не живёт внутри webview мессенджера.
+    if (maxBridge.openLink('https://esia.gosuslugi.ru/')) {
+      toast('Возвращайтесь в MAX после входа — уровень обновится сам.');
+      return;
+    }
+    toast('<b>Вход через Госуслуги открывается во внешнем браузере</b> — ЕСИА не работает внутри webview. Подключение ЕСИА организации требует аттестации по требованиям ИБ, поэтому на пилоте личность подтверждает банковский ID или модератор «Заступника».');
+  },
+  'verify-crim'() {
+    if (maxBridge.openLink('https://www.gosuslugi.ru/600103/1')) return;
+    toast('<b>Справку о несудимости заказывает сам человек</b> на Госуслугах — она приходит подписанной МВД, и мы проверяем подпись. Срок до 30 дней: это и есть настоящая цена доверия, обойти её нечем.');
+  },
+  // Граница между продуктами: живая карта — в нативном «Заступнике».
+  'open-native'() {
+    if (maxBridge.openLink('https://zastupnik.app/trip/' + (DB.trip ? DB.trip.routeId : ''))) return;
+    toast('<b>Живая карта — в приложении «Заступник».</b> Мини-апп в MAX показывает последнюю точку и статусы, но не ведёт трекинг: фоновая геопозиция в webview невозможна.');
+  },
+  'verify-local'() {
+    toast('Координатору школы ушёл запрос. Он подтверждает не вашу добропорядочность, а факт: этот человек здесь учится или водит сюда ребёнка.');
+  },
+  'verify-live'() {
+    const b = maxBridge.biometry.init();
+    if (!b) {
+      toast('<b>Биометрия доступна только в мобильном MAX.</b> Перед каждым выходом на маршрут приложение спросит отпечаток или лицо — так проверяется не документ, а то, что телефон в тех же руках.');
+      return;
+    }
+    Promise.resolve(b).then(() => maxBridge.biometry.auth('Подтвердите, что это вы, перед выходом на маршрут'))
+      .then(() => { meNow().trust.live = 1; maxBridge.notify('success'); toast('<b>Живость подтверждена.</b> Уровень держится одну смену — завтра спросим снова.'); render(); })
+      .catch(() => { toast('Биометрия не подтверждена — выход на маршрут остаётся закрытым.'); render(); });
+  },
+
   approve(el) {
     const c = DB.people[el.dataset.c];
+    if (!trustOk(c)) {
+      maxBridge.notify('error');
+      toast('<b>' + c.name + ' не прошёл' + (c.id === 'a3' ? 'а' : '') + ' уровень «' + TRUST_BY[ESCORT_GATE].name + '».</b> Назначить нельзя — это не рекомендация платформы, а порог.');
+      return;
+    }
     const r = DB.routes.find((x) => x.id === el.dataset.r);
     r.cover[el.dataset.d] = c.id;
     if (DB.pending && DB.pending.id === c.id) DB.pending = null;
@@ -1589,7 +1859,10 @@ const A = {
   'confirm-student'(el) {
     C.confirmed = C.confirmed || {};
     C.confirmed[el.dataset.c] = true;
-    toast('Факт обучения подтверждён. Школа подтверждает только это — ответственности за поездку у неё нет.');
+    // Подтверждение школы — это и есть уровень «свой в школе».
+    const c = DB.people[el.dataset.c];
+    if (c) c.trust.local = 1;
+    toast('Факт обучения подтверждён — у кандидата появился уровень «' + TRUST_BY.local.name + '». Школа подтверждает только это: ответственности за поездку у неё нет.');
   },
 
   /* дежурный */
